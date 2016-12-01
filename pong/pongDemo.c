@@ -1,3 +1,4 @@
+
 #include <msp430.h>
 #include <libTimer.h>
 #include <lcdutils.h>
@@ -5,15 +6,17 @@
 #include <p2switches.h>
 #include <shape.h>
 #include <abCircle.h>
+#include "buzzer.h"
+
 //#include <paddleButtons.h>
 
 //The paddle always starts at the middle
 #define PADDLE_START_POSITION (screenWidth/2)
-#define GREEN_LED BIT6
-#define P1Switch SW1
-#define P2Switch (UpSwitch + DownSwitch + LeftSwitch + RightSwitch)
+#define GREEN_LED BIT6 
 
 unsigned char oldP1SwitchValue, oldP2SwitchValue;
+char p1Score = '0';
+char p2Score = '0';
 
 AbRect leftPaddle = {abRectGetBounds, abRectCheck, {20,5}};
 AbRect rightPaddle = {abRectGetBounds, abRectCheck, {20,5}};
@@ -67,9 +70,10 @@ typedef struct MovLayer_s {
 } MovLayer;
 
 MovLayer ml2 = { &leftPaddleLayer, {0,0}, 0};
-MovLayer ml1 = { &rightPaddleLayer, {0,0}, &ml2};
-MovLayer ml0 = { &ballLayer, {6,3}, &ml1};
+MovLayer ml1 = { &rightPaddleLayer, {0,0}, 0};
+MovLayer ml0 = { &ballLayer, {6,3}, 0};
 
+//Function provided by Dr. Freudenthal
 movLayerDraw(MovLayer *movLayers, Layer *layers)
 {
   int row, col;
@@ -113,8 +117,13 @@ movLayerDraw(MovLayer *movLayers, Layer *layers)
  *  
  *  \param ml The moving shape to be advanced
  *  \param fence The region which will serve as a boundary for ml
- */
-void mlAdvance(MovLayer *ml, Region *fence)
+    \Parameter ml2 checks the left paddle
+    \Parameter ml3 checks the right paddle
+*/ 
+//Function provided by Dr. Freudenthal
+//This function has been modified for collision detection
+//Two additional parameters have been added for both paddles
+void mlAdvance(MovLayer *ml,MovLayer *ml2, MovLayer *ml3, Region *fence)
 {
   Vec2 newPos;
   u_char axis;
@@ -122,32 +131,61 @@ void mlAdvance(MovLayer *ml, Region *fence)
   for (; ml; ml = ml->next) {
     vec2Add(&newPos, &ml->layer->posNext, &ml->velocity);
     abShapeGetBounds(ml->layer->abShape, &newPos, &shapeBoundary);
-    for (axis = 0; axis < 2; axis ++) {
+    for (axis = 0; axis < 2; axis ++)
+    {
       if ((shapeBoundary.topLeft.axes[axis] < fence->topLeft.axes[axis]) ||
 	  (shapeBoundary.botRight.axes[axis] > fence->botRight.axes[axis]) ) {
 	int velocity = ml->velocity.axes[axis] = -ml->velocity.axes[axis];
 	newPos.axes[axis] += (2*velocity);
       }	/**< if outside of fence */
-    } /**< for axis */
+
+    //check paddle collision
+    if((ml->layer->posNext.axes[1] >= 134) && (ml->layer->posNext.axes[0] <= ml2->layer->posNext.axes[0] + 18 && ml->layer->posNext.axes[0] >= ml2->layer->posNext.axes[0] - 18))
+      {
+	int velocity = ml->velocity.axes[axis] = -ml->velocity.axes[axis];
+	ml->velocity.axes[0] += 1;
+	newPos.axes[axis] += (2*velocity);
+	drawString5x7(3,20, "Player 1:", COLOR_RED, COLOR_BLACK);
+  drawChar5x7(100,20, p1Score, COLOR_WHITE, COLOR_BLACK);
+  drawString5x7(3,130, "Player 2:", COLOR_BLUE, COLOR_BLACK);
+    drawChar5x7(100,130, p2Score, COLOR_WHITE, COLOR_BLACK);
+    buzzer_set_period(1500);
+	int redrawscreen = 1;
+
+      }
+
+    else if ((ml->layer->posNext.axes[1] <= 21) && (ml2->layer->posNext.axes[0] <= ml3->layer->posNext.axes[0] + 20 && ml->layer->posNext.axes[0]>= ml3->layer->posNext.axes[0] -20))
+      {
+	int velocity = ml->velocity.axes[axis] = -ml->velocity.axes[axis];
+	ml->velocity.axes[0] += 1;
+	newPos.axes[axis] += (2*velocity);
+	drawString5x7(3,20, "Player 1:", COLOR_RED, COLOR_BLACK);
+  drawChar5x7(100,20, p1Score, COLOR_WHITE, COLOR_BLACK);
+  drawString5x7(3,130, "Player 2:", COLOR_BLUE, COLOR_BLACK);
+    drawChar5x7(100,130, p2Score, COLOR_WHITE, COLOR_BLACK);
+    buzzer_set_period(3000);
+	int redrawScreen = 1;
+
+      }
+    //Check boundaries
+    if ((ml->layer->posNext.axes[1] <= 20)|| (ml->layer->posNext.axes[1] >=100))
+      {
+ 	p1Score++;
+	ml->layer->posNext = newPos;
+      }
+    if((ml->layer->posNext.axes[1] == 130))
+      {
+	p2Score++;
+	ml->layer->posNext = newPos;
+      }
     ml->layer->posNext = newPos;
-  } /**< for ml */
+    drawString5x7(3,20, "Player 1:", COLOR_RED, COLOR_BLACK);
+  drawChar5x7(100,20, p1Score, COLOR_WHITE, COLOR_BLACK);
+  drawString5x7(3,130, "Player 2:", COLOR_BLUE, COLOR_BLACK);
+    drawChar5x7(100,130, p2Score, COLOR_WHITE, COLOR_BLACK);
+    }
+  }
 }
-/*
-void initializeSwitchInterrupts()
-{
-  P1REN |= P1Switch;
-  P2REN |= P2Switch;
-  P1OUT |= P1Switch;
-  P2OUT |= P2Switch;
-  oldP1SwitchValue = P1IN & P2Switch;
-  oldP2SwitchValue = P2IB & P2Switch;
-  P2IES = oldP1SwitchValue;
-  P2IES = oldP2SwitchValue;
-  P1IE = P1Switch;
-  P2IE = P2Switch;
-}
-*/
-u_char paddleY = PADDLE_START_POSITION;
 
 Region fieldFence;
 Region leftFence;
@@ -164,7 +202,8 @@ void main()
   configureClocks();
   lcd_init();
   shapeInit();
-  p2sw_init(1);
+  buzzer_init();
+  p2sw_init(15);
 
   shapeInit();
 
@@ -178,12 +217,17 @@ void main()
   layerDraw(&ballLayer);
 
   layerGetBounds(&fieldLayer, &fieldFence);
-  layerGetBounds(&leftPaddleLayer, &leftFence);
-  layerGetBounds(&rightPaddleLayer, &rightFence);
+  //layerGetBounds(&leftPaddleLayer, &leftFence);
+  //layerGetBounds(&rightPaddleLayer, &rightFence);
   
   enableWDTInterrupts();      /**< enable periodic interrupt */
   or_sr(0x8);	              /**< GIE (enable interrupts) */
 
+  drawString5x7(3,20, "Player 1:", COLOR_RED, COLOR_BLACK);
+  drawChar5x7(100,20, p1Score, COLOR_WHITE, COLOR_BLACK);
+  drawString5x7(3,130, "Player 2:", COLOR_BLUE, COLOR_BLACK);
+    drawChar5x7(100,130, p2Score, COLOR_WHITE, COLOR_BLACK);
+  
     for(;;) { 
     while (!redrawScreen) { /**< Pause CPU if screen doesn't need updating */
       P1OUT &= ~GREEN_LED;    /**< Green led off witHo CPU */
@@ -192,6 +236,8 @@ void main()
     P1OUT |= GREEN_LED;       /**< Green led on when CPU on */
     redrawScreen = 0;
     movLayerDraw(&ml0, &ballLayer);
+    //movLayerDraw(&ml1, &leftPaddleLayer);
+    //movLayerDraw(&ml2, &rightPaddleLayer);
   }
 }
 
@@ -202,7 +248,8 @@ void wdt_c_handler()
   P1OUT |= GREEN_LED;		      /**< Green LED on when cpu on */
   count ++;
   if (count == 15) {
-    mlAdvance(&ml0, &fieldFence);
+    mlAdvance(&ml0, &ml1, &ml2, &fieldFence);
+    //mlAdvance(&ml0, &fieldFence);
     if (p2sw_read())
       redrawScreen = 1;
     count = 0;
